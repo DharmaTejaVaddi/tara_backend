@@ -97,6 +97,8 @@ class EventInstanceSerializer(serializers.ModelSerializer):
 
 
 class ContextWiseEventAndDocumentSerializer(serializers.ModelSerializer):
+    context = serializers.PrimaryKeyRelatedField(queryset=UserDocumentDraft.objects.all(), required=False,
+                                                 allow_null=True, default=None)
 
     class Meta:
         model = ContextWiseEventAndDocument
@@ -151,7 +153,8 @@ class ContextWiseEventAndDocumentStatusSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ContextWiseEventAndDocument
-        fields = ['id', 'created_date', 'document','category', 'event', 'status', 'last_edited', 'creator', 'file', 'file_name']
+        fields = ['id', 'created_date', 'document','category', 'event', 'status', 'last_edited', 'creator', 'file',
+                  'file_name', 'created_by']
 
     def get_category(self, obj):
         if obj.category:
@@ -231,4 +234,4 @@ class FilterDropdownDataSerializer(serializers.Serializer):
     event_names = serializers.ListField(child=serializers.CharField())
     category_names = serializers.ListField(child=serializers.CharField())
     statuses = serializers.ListField(child=serializers.CharField())
-    created_by = serializers.ListField(child=serializers.CharField())
+    created_by = serializers.ListField(child=serializers.JSONField(default=dict))

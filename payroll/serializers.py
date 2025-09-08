@@ -1340,3 +1340,9 @@ class EventManagementSerializer(serializers.ModelSerializer):
             event.applicable_to.set(applicable_to)
         return event
 
+
+
+class LeaveTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeaveManagement
+        fields = ['id', 'name_of_leave']

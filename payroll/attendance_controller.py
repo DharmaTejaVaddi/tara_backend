@@ -41,6 +41,10 @@ def get_payroll_and_employee(request):
     except Exception as e:
         return None, None, Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    if employee.enable_portal_access is False:
+        return None, None, Response({'error': 'Portal access is disabled for this employee'},
+                                    status=status.HTTP_401_UNAUTHORIZED)
+
     return payroll, employee, None
 
 
