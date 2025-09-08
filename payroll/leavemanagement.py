@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from schedule import logger
 from .models import LeaveApplication, EmployeeLeaveBalance, EmployeeReportingManager, EmployeeCredentials, current_financial_year
-from .serializers import LeaveApplicationSerializer, EmployeeLeaveBalanceSerializer
+from .serializers import LeaveApplicationSerializer, EmployeeLeaveBalanceSerializer, LeaveTypeSerializer
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -32,6 +32,11 @@ def get_leave_notifications(request):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         # Get notifications using employee instead of user
         notifications = LeaveNotification.objects.select_related(
@@ -97,12 +102,14 @@ def get_leave_notifications(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
 def get_unread_count_for_reviewer(employee_id):
     """Get unread count for an employee"""
     return LeaveNotification.objects.filter(
         reviewer_id=employee_id, 
         is_read=False
     ).count()
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -112,6 +119,11 @@ def unread_leave_notification_count(request):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
         count = LeaveNotification.objects.filter(
             reviewer=employee,  # Use employee instead of user
             is_read=False
@@ -125,6 +137,7 @@ def unread_leave_notification_count(request):
             {"error": "Employee record not found"}, 
             status=status.HTTP_404_NOT_FOUND
         )
+
 
 def create_notification_data(notif, recipient_employee):
     """Format notification data for a single notification"""
@@ -160,6 +173,7 @@ def create_notification_data(notif, recipient_employee):
         "read_at": format_time_style(notif.read_at) if notif.read_at else None
     }
 
+
 def get_notification_message(leave, employee_name, employee_designation, employee_department, days):
     """Create notification message"""
     return (
@@ -168,6 +182,7 @@ def get_notification_message(leave, employee_name, employee_designation, employe
         f"The leave period is from {leave.start_date.strftime('%d %b %Y')} to {leave.end_date.strftime('%d %b %Y')}. "
         f"Reason for leave: {leave.reason}"
     )
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -179,6 +194,11 @@ def apply_leave(request):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         # Validate employee
         if str(employee.id) != str(request.data.get('employee')):
@@ -337,6 +357,9 @@ def get_leave_applications(request):
         user = request.user
         payroll = PayrollOrg.objects.get(business=user.active_context.business)
         employee = EmployeeManagement.objects.get(payroll=payroll, user=user)
+        if employee.enable_portal_access is False:
+            return Response({'error': 'Portal access is disabled for this employee.'},
+                            status=status.HTTP_401_UNAUTHORIZED)
     except (PayrollOrg.DoesNotExist, EmployeeManagement.DoesNotExist):
         return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -368,6 +391,11 @@ def handle_leave_action(request, leave_id):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'No employee record found for logged in user'}, 
@@ -533,6 +561,7 @@ def handle_leave_action(request, leave_id):
         'remaining_balance': updated_balance.leave_remaining if action == 'approve' else None
     }, status=status.HTTP_200_OK)
 
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def reject_leave(request, leave_id):
@@ -542,6 +571,11 @@ def reject_leave(request, leave_id):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'No employee record found for logged in user'}, 
@@ -629,6 +663,11 @@ def cancel_leave(request, leave_id):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'No employee record found for logged in user'}, 
@@ -697,6 +736,11 @@ def get_monthly_leaves(request, year, month):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {"error": "Portal access is disabled for this employee."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'Employee record not found for logged in user'}, 
@@ -753,6 +797,11 @@ def get_leave_summary(request, year=None):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {'error': 'Portal access is disabled for this employee.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'Employee record not found'}, 
@@ -817,6 +866,11 @@ def get_my_leave_balances(request):
             user=request.user,
             payroll__business=request.user.active_context.business
         )
+        if employee.enable_portal_access is False:
+            return Response(
+                {'error': 'Portal access is disabled for this employee.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
     except EmployeeManagement.DoesNotExist:
         return Response(
             {'error': 'Employee record not found'}, 
@@ -893,5 +947,51 @@ def get_my_leave_balances(request):
         logger.error(f"Error fetching leave balances: {str(e)}", exc_info=True)
         return Response({
             'error': 'Failed to fetch leave balances',
+            'detail': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_leave_types(request):
+    """Get all leave types for the employee's payroll."""
+    user = request.user
+    if not isinstance(user, Users):
+        return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    try:
+        # Get employee record
+        employee = EmployeeManagement.objects.get(
+            user=request.user,
+            payroll__business=request.user.active_context.business
+        )
+        if employee.enable_portal_access is False:
+            return Response(
+                {'error': 'Portal access is disabled for this employee.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    except EmployeeManagement.DoesNotExist:
+        return Response(
+            {'error': 'Employee record not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    try:
+        # Get leave types for the employee's payroll
+        leave_types = LeaveManagement.objects.filter(
+            payroll=employee.payroll
+        )
+
+        serializer = LeaveTypeSerializer(leave_types, many=True)
+
+        return Response({
+            'employee_id': employee.id,
+            'employee_name': f"{employee.first_name} {employee.last_name}",
+            'leave_types': serializer.data
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching leave types: {str(e)}", exc_info=True)
+        return Response({
+            'error': 'Failed to fetch leave types',
             'detail': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

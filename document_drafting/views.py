@@ -1,5 +1,6 @@
 import json
-from rest_framework.decorators import api_view, parser_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework import status
@@ -91,6 +92,7 @@ def events_detail(request, pk):
 
 @api_view(['GET', 'POST'])
 @parser_classes([MultiPartParser, FormParser, JSONParser])
+@permission_classes([AllowAny])
 def document_list_create(request):
     if request.method == 'GET':
         draft_id = request.query_params.get('draft_id')
@@ -210,19 +212,30 @@ def document_fields_by_document(request, document_id):
 @api_view(['GET'])
 def document_template_and_fields(request, id):
     try:
-        context = ContextWiseEventAndDocument.objects.get(pk=id)
+        draft = ContextWiseEventAndDocument.objects.get(pk=id)
     except ContextWiseEventAndDocument.DoesNotExist:
         return Response({'error': 'Data not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    fields = context.document.fields.all().order_by('id')
-    document = DocumentSerializer(context.document)
+    if not draft.context and request.active_context:
+        try:
+            try:
+                context = UserDocumentDraft.objects.get(context=request.active_context)
+            except UserDocumentDraft.DoesNotExist:
+                context = UserDocumentDraft.objects.create(context=request.active_context)
+            draft.context = context
+            draft.save()
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    fields = draft.document.fields.all().order_by('id')
+    document = DocumentSerializer(draft.document)
     serializer = DocumentFieldsSerializer(fields, many=True)
-    draft_info = DocumentDraftDetailSerializer(DocumentDraftDetail.objects.filter(draft=context), many=True).data
+    draft_info = DocumentDraftDetailSerializer(DocumentDraftDetail.objects.filter(draft=draft), many=True).data
     return Response({
         'template': document.data['template'],
         'fields': serializer.data,
         'draft_info': draft_info,
-        'file_name': context.file_name,
+        'file_name': draft.file_name,
     })
 
 
@@ -472,6 +485,7 @@ def document_status_list(request, context_id):
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
 def context_wise_event_and_document_list_create(request):
     if request.method == 'GET':
         queryset = ContextWiseEventAndDocument.objects.select_related(
@@ -809,11 +823,15 @@ def get_filter_dropdown_data(request):
     created_by = []
     if context_id:
         queryset = ContextWiseEventAndDocument.objects.filter(context_id=context_id)
-        created_by_users = queryset.values_list('created_by__first_name', 'created_by__middle_name', 'created_by__last_name')
-        for first, middle, last in created_by_users:
-            name = ' '.join(part for part in [first, middle, last] if part)
-            if name and name not in created_by:
-                created_by.append(name)
+        created_by_users = queryset.values_list(
+            'created_by__id',
+            'created_by__first_name',
+            'created_by__last_name'
+        )
+        for user_id, first, last in created_by_users:
+            name = ' '.join(part for part in [first, last] if part)
+            if name and not any(entry["id"] == user_id for entry in created_by):
+                created_by.append({"id": user_id, "name": name})
 
     data = {
         'document_names': [d for d in document_names if d],
@@ -838,30 +856,12 @@ def get_filtered_documents(request, context_id):
         'category__category_name': request.query_params.get('category_name'),
         'status': request.query_params.get('status'),
         'created_at__date': request.query_params.get('created_at'),
+        'created_by_id': request.query_params.get('created_by'),
     }
 
     # Remove any None values from the filters
     filters = {k: v for k, v in filters.items() if v}
 
     queryset = ContextWiseEventAndDocument.objects.filter(context_id=context_id, **filters).order_by('-updated_at')
-
-    # Handle created_by (name split logic)
-    created_by_val = request.query_params.get('created_by')
-    if created_by_val:
-        name_parts = created_by_val.split()
-        if len(name_parts) == 1:
-            queryset = queryset.filter(created_by__first_name__icontains=name_parts[0]).order_by('-updated_at')
-        elif len(name_parts) == 2:
-            queryset = queryset.filter(
-                created_by__first_name__icontains=name_parts[0],
-                created_by__last_name__icontains=name_parts[1]
-            ).order_by('-updated_at')
-        elif len(name_parts) == 3:
-            queryset = queryset.filter(
-                created_by__first_name__icontains=name_parts[0],
-                created_by__middle_name__icontains=name_parts[1],
-                created_by__last_name__icontains=name_parts[2]
-            ).order_by('-updated_at')
-
     serializer = ContextWiseEventAndDocumentStatusSerializer(queryset, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)

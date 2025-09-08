@@ -26,8 +26,11 @@ def employee_education_list_create(request):
         payroll = PayrollOrg.objects.get(business=user.active_context.business)
         # Get employee record
         employee = EmployeeManagement.objects.get(payroll=payroll, user=user)
+        if employee.enable_portal_access is False:
+            return Response({'error': 'Employee portal access is disabled'}, status=401)
     except (AttributeError, EmployeeManagement.DoesNotExist):
         return Response({'error': 'Employee record not found'}, status=401)
+
 
     if request.method == 'GET':
         # List all education details for the employee
@@ -54,6 +57,8 @@ def employee_education_detail(request, education_id):
         # Get active context's payroll
         payroll = PayrollOrg.objects.get(business=user.active_context.business)        # Get employee record
         employee = EmployeeManagement.objects.get(payroll=payroll, user=user)
+        if employee.enable_portal_access is False:
+            return Response({'error': 'Employee portal access is disabled'}, status=401)
     except (AttributeError, EmployeeManagement.DoesNotExist):
         return Response({'error': 'Employee record not found'}, status=401)
 
@@ -95,6 +100,8 @@ def employee_profile_details(request):
         # Get active context's payroll
         payroll = PayrollOrg.objects.get(business=user.active_context.business)        # Get employee record
         employee = EmployeeManagement.objects.get(payroll=payroll, user=user)
+        if employee.enable_portal_access is False:
+            return Response({'error': 'Employee portal access is disabled'}, status=401)
     except (AttributeError, EmployeeManagement.DoesNotExist):
         return Response({'error': 'Employee record not found'}, status=401)
 
