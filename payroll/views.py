@@ -2249,6 +2249,8 @@ def employee_list(request):
     elif request.method == 'POST':
         payroll_id = request.data.get("payroll")
         context_id = None
+        data = request.data.copy()
+        reporting_manager = data.get("reporting_manager")
 
         # Step 1: Resolve context via payroll -> business -> context
         try:
@@ -2283,6 +2285,12 @@ def employee_list(request):
             if serializer.is_valid():
                 employee = serializer.save()
                 increment_usage(usage_entry)
+                if reporting_manager:
+                    reporting_manager['employee'] = employee
+                    reporting_to = EmployeeReportingManagerSerializer(data=reporting_manager)
+                    if reporting_to.is_valid():
+                        reporting_to.save()
+                        print(reporting_to)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
                 

@@ -1591,6 +1591,34 @@ class LeaveApplication(models.Model):
     reviewer_comment = models.TextField(blank=True)
     attach_file = models.FileField(upload_to=leave_attachments, null=True, blank=True)
 
+    # Half-day support
+    is_half_day = models.BooleanField(default=False)
+    half_day_session = models.CharField(
+        max_length=15,
+        choices=[('First Half', 'First Half'), ('Second Half', 'Second Half')],
+        null=True,
+        blank=True
+    )
+
+    def clean(self):
+        super().clean()
+        if self.is_half_day:
+            if self.start_date and self.end_date and self.start_date != self.end_date:
+                raise ValidationError('Half-day leave must start and end on the same date.')
+            if not self.half_day_session:
+                raise ValidationError({'half_day_session': 'This field is required for half-day leave.'})
+        else:
+            if self.half_day_session:
+                raise ValidationError({'half_day_session': 'Must be empty when not a half-day leave.'})
+
+    @property
+    def requested_days(self):
+        if self.is_half_day:
+            return 0.5
+        if self.start_date and self.end_date:
+            return (self.end_date - self.start_date).days + 1
+        return 0
+
     def __str__(self):
         return f"{self.employee} - {self.leave_type} - {self.start_date} to {self.end_date}"
 
@@ -1639,7 +1667,18 @@ def current_financial_year():
 def update_leave_balance_on_approval(sender, instance, created, **kwargs):
     """Update leave balance when a leave is approved"""
     if instance.status == 'approved':
-        leave_days = (instance.end_date - instance.start_date).days + 1
+        # Support deduction without model fields by parsing reviewer_comment tag
+        leave_days = None
+        try:
+            # If half-day tag exists in reviewer_comment, use 0.5
+            comment = (instance.reviewer_comment or '').upper()
+            if '[HALF_DAY:' in comment:
+                leave_days = 0.5
+        except Exception:
+            leave_days = None
+
+        if leave_days is None:
+            leave_days = getattr(instance, 'requested_days', (instance.end_date - instance.start_date).days + 1)
 
         try:
             leave_balance = EmployeeLeaveBalance.objects.get(
@@ -1661,6 +1700,7 @@ def update_leave_balance_on_approval(sender, instance, created, **kwargs):
             # Update balance if sufficient
             with transaction.atomic():
                 leave_balance.leave_used += leave_days
+                leave_balance.leave_remaining = leave_balance.leave_remaining - leave_days
                 leave_balance.save()
                 
                 # Update reviewed_on date

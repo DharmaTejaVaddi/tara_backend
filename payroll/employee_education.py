@@ -105,10 +105,10 @@ def employee_profile_details(request):
     except (AttributeError, EmployeeManagement.DoesNotExist):
         return Response({'error': 'Employee record not found'}, status=401)
 
-    full_name = f"{employee.employee.first_name} "
-    if employee.employee.middle_name:
-        full_name += f"{employee.employee.middle_name} "
-    full_name += employee.employee.last_name
+    full_name = f"{employee.first_name} "
+    if employee.middle_name:
+        full_name += f"{employee.middle_name} "
+    full_name += employee.last_name
 
     #Get employee image if exists
     try:
@@ -117,7 +117,7 @@ def employee_profile_details(request):
         employee_image = None
 
     try:
-        personal = EmployeePersonalDetails.objects.get(employee=employee.employee)
+        personal = EmployeePersonalDetails.objects.get(employee=employee)
     except EmployeePersonalDetails.DoesNotExist:
         personal = None
 
