@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 from django.db.models import Q, Sum
 from calendar import monthrange, month_name
 from .models import LeaveNotification
+from django.utils import timezone
 
 
 class PayrollOrgSerializer(serializers.ModelSerializer):
@@ -1201,6 +1202,9 @@ class EmployeeFaceRecognitionSerializer(serializers.ModelSerializer):
 class LeaveApplicationSerializer(serializers.ModelSerializer):
     cc_to = serializers.PrimaryKeyRelatedField(many=True, queryset=EmployeeManagement.objects.all(), required=False)
     requested_days = serializers.SerializerMethodField(read_only=True)
+    leave_type = serializers.SerializerMethodField(read_only=True)
+    start_date = serializers.SerializerMethodField(read_only=True)
+    end_date = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LeaveApplication
@@ -1266,6 +1270,14 @@ class LeaveApplicationSerializer(serializers.ModelSerializer):
             if obj.start_date and obj.end_date:
                 return (obj.end_date - obj.start_date).days + 1
             return 0
+    def get_leave_type(self, obj):
+        return obj.leave_type.name_of_leave
+
+    def get_start_date(self, obj):
+        return obj.start_date.strftime("%d-%m-%Y") if obj.start_date else None
+
+    def get_end_date(self, obj):
+        return obj.end_date.strftime("%d-%m-%Y") if obj.end_date else None
 
 
 class EmployeeEducationDetailsSerializer(serializers.ModelSerializer):
