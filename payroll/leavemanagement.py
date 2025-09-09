@@ -2,7 +2,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from schedule import logger
-from .models import LeaveApplication, EmployeeLeaveBalance, EmployeeReportingManager, EmployeeCredentials, current_financial_year
+from .models import (LeaveApplication, EmployeeLeaveBalance, EmployeeReportingManager, EmployeeCredentials,
+                     current_financial_year)
+from .attendance_controller import get_payroll_and_employee
 from .serializers import LeaveApplicationSerializer, EmployeeLeaveBalanceSerializer, LeaveTypeSerializer
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
@@ -21,6 +23,7 @@ from payroll.serializers import (
     LeaveManagementSerializer, LeaveApplicationSerializer, LeaveNotificationSerializer
 )
 from usermanagement.models import Users
+from django.db.models import Sum, Q
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -174,11 +177,21 @@ def create_notification_data(notif, recipient_employee):
     }
 
 
-def get_notification_message(leave, employee_name, employee_designation, employee_department, days):
-    """Create notification message"""
+def get_notification_message(leave, employee_name, employee_designation, employee_department, days=None):
+    """Create notification message with half-day support"""
+    if days is None:
+        days = getattr(leave, 'requested_days', (leave.end_date - leave.start_date).days + 1)
+    if days == 0.5:
+        session_map = {'First Half': 'First Half', 'Second Half': 'Second Half'}
+        session_label = session_map.get(getattr(leave, 'half_day_session', None), 'Half Day')
+        days_text = f"a half-day ({session_label})"
+    else:
+        plural = '' if days == 1 else 's'
+        days_text = f"{days} day{plural}"
+
     return (
         f"{employee_name}, {employee_designation} from the {employee_department} department, "
-        f"has requested {days} day{'s' if days > 1 else ''} of {leave.leave_type.name_of_leave}. "
+        f"has requested {days_text} of {leave.leave_type.name_of_leave}. "
         f"The leave period is from {leave.start_date.strftime('%d %b %Y')} to {leave.end_date.strftime('%d %b %Y')}. "
         f"Reason for leave: {leave.reason}"
     )
@@ -253,7 +266,7 @@ def apply_leave(request):
                 employee_name=f"{employee.first_name} {employee.last_name}",
                 employee_designation=employee.designation.designation_name if employee.designation else "N/A",
                 employee_department=employee.department.dept_name if employee.department else "N/A",
-                days=(leave.end_date - leave.start_date).days + 1
+                days=0.5 if leave.is_half_day else (leave.end_date - leave.start_date).days + 1
             )
 
             # Create notifications for all recipients
@@ -473,8 +486,16 @@ def handle_leave_action(request, leave_id):
         leave.reviewer_comment = comment
 
         if action == 'approve':
-            # Check leave balance before approval
-            leave_days = (leave.end_date - leave.start_date).days + 1
+            # Check leave balance before approval (support transient half-day without model changes)
+            half_day_flag = leave.is_half_day
+            half_day_session = str(leave.half_day_session or '').upper() or None
+
+            if half_day_flag and leave.start_date != leave.end_date:
+                return Response({
+                    'error': 'Half-day is only allowed for single-day leaves.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            leave_days = 0.5 if half_day_flag else (leave.end_date - leave.start_date).days + 1
             try:
                 leave_balance = EmployeeLeaveBalance.objects.get(
                     employee=leave.employee,
@@ -496,6 +517,10 @@ def handle_leave_action(request, leave_id):
 
             leave.status = 'approved'
             message = 'Leave approved successfully.'
+            # Tag reviewer comment with half-day marker for downstream processing
+            if half_day_flag:
+                tag = f"[HALF_DAY:{half_day_session or 'NA'}]"
+                comment = f"{tag} {comment or ''}".strip()
         else:
             if not comment:
                 return Response(
@@ -983,9 +1008,66 @@ def get_leave_types(request):
 
         serializer = LeaveTypeSerializer(leave_types, many=True)
 
+        # Reporting manager
+        reporting = EmployeeReportingManager.objects.select_related('reporting_manager').filter(
+            employee=employee
+        ).first()
+        reporting_manager = None
+        if reporting and reporting.reporting_manager:
+            rm = reporting.reporting_manager
+            reporting_manager = f"{rm.first_name} {rm.last_name}".strip()
+
+        # Financial year range
+        fy = current_financial_year()
+        start_year, end_year = map(int, fy.split('-')) if '-' in fy else (timezone.now().year, timezone.now().year+1)
+        fy_start = date(start_year, 4, 1)
+        fy_end = date(end_year, 3, 31)
+
+        # Available leave (remaining)
+        balances = EmployeeLeaveBalance.objects.filter(employee=employee, financial_year=fy).aggregate(
+            remaining=Sum('leave_remaining'), used=Sum('leave_used')
+        )
+        available_leave = float(balances.get('remaining') or 0)
+
+        # Applied leave (days in FY, approved or pending)
+        applied_qs = LeaveApplication.objects.filter(
+            employee=employee,
+            status__in=['approved', 'pending'],
+            start_date__lte=fy_end,
+            end_date__gte=fy_start
+        ).select_related('leave_type')
+        applied_leave = 0.0
+        for lv in applied_qs:
+            # overlap with FY
+            start = max(lv.start_date, fy_start)
+            end = min(lv.end_date, fy_end)
+            if end < start:
+                continue
+            if getattr(lv, 'is_half_day', False):
+                applied_leave += 0.5
+            else:
+                applied_leave += (end - start).days + 1
+
+        # LOP (days in FY, approved only)
+        lop_qs = applied_qs.filter(status='approved', leave_type__name_of_leave__iexact='Loss of Pay')
+        lop = 0.0
+        for lv in lop_qs:
+            start = max(lv.start_date, fy_start)
+            end = min(lv.end_date, fy_end)
+            if end < start:
+                continue
+            if getattr(lv, 'is_half_day', False):
+                lop += 0.5
+            else:
+                lop += (end - start).days + 1
+
         return Response({
             'employee_id': employee.id,
             'employee_name': f"{employee.first_name} {employee.last_name}",
+            'reporting_manager': reporting_manager,
+            'available_leave': available_leave,
+            'applied_leave': applied_leave,
+            'lop': lop,
             'leave_types': serializer.data
         })
 
@@ -995,3 +1077,118 @@ def get_leave_types(request):
             'error': 'Failed to fetch leave types',
             'detail': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_my_leave_applications_with_status(request):
+    """Return all leave applications for the logged-in employee.
+    If query param `status` is provided, filter by that status; otherwise return all.
+    """
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
+
+    status_param = (request.query_params.get('status') or '').strip().lower()
+
+    qs = LeaveApplication.objects.select_related(
+        'employee', 'leave_type', 'reviewer'
+    ).prefetch_related('cc_to').filter(
+        employee=employee
+    ).order_by('-applied_on')
+
+    if status_param:
+        qs = qs.filter(status=status_param)
+
+    serializer = LeaveApplicationSerializer(qs, many=True)
+    return Response({
+        'employee_id': employee.id,
+        'count': qs.count(),
+        'results': serializer.data
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_leave_dashboard_summary(request):
+    """Return six leave KPIs for the logged-in employee.
+    Uses only EmployeeLeaveBalance and LeaveApplication.
+    """
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
+
+    # Financial year context
+    fy = current_financial_year()
+    try:
+        start_year, end_year = map(int, fy.split('-'))
+    except Exception:
+        today = date.today()
+        start_year = today.year if today.month >= 4 else today.year - 1
+        end_year = start_year + 1
+    fy_start = date(start_year, 4, 1)
+    fy_end = date(end_year, 3, 31)
+
+    # Month window
+    today = timezone.now().date()
+    month_start = date(today.year, today.month, 1)
+    if today.month == 12:
+        month_end = date(today.year, 12, 31)
+    else:
+        month_end = (date(today.year, today.month + 1, 1) - timedelta(days=1))
+
+    # Balances (sum across all leave types)
+    balances = EmployeeLeaveBalance.objects.filter(
+        employee=employee, financial_year=fy
+    ).aggregate(
+        total_leaves=Sum('leave_entitled'),
+        used_leaves=Sum('leave_used'),
+        remaining_leaves=Sum('leave_remaining')
+    )
+
+    total_leaves = int(balances.get('total_leaves') or 0)
+    used_leaves = float(balances.get('used_leaves') or 0)
+    remaining_leaves = float(balances.get('remaining_leaves') or 0)
+
+    # Pending approvals for current employee as reviewer
+    pending_approvals = LeaveApplication.objects.filter(
+        employee=employee,
+        status='pending',
+        end_date__gte=fy_start,
+        start_date__lte=fy_end
+    ).count()
+
+    # Approved leaves of current employee overlapping current month
+    this_month_leaves = LeaveApplication.objects.filter(
+        employee=employee,
+        status='approved',
+        start_date__lte=month_end,
+        end_date__gte=month_start
+    )
+    # Sum overlap days (ignores half-day until DB migration is applied)
+    this_month_days = 0.0
+    for leave in this_month_leaves:
+        overlap_start = max(leave.start_date, month_start)
+        overlap_end = min(leave.end_date, month_end)
+        if overlap_end >= overlap_start:
+            this_month_days += (overlap_end - overlap_start).days + 1
+
+    # Team on leave today (exclude self)
+    team_on_leave = LeaveApplication.objects.filter(
+        employee__payroll=employee.payroll,
+        status='approved',
+        start_date__lte=today,
+        end_date__gte=today
+    ).exclude(employee=employee).values('employee').distinct().count()
+
+    return Response({
+        'employee_id': employee.id,
+        'financial_year': fy,
+        'total_leaves': total_leaves,
+        'used_leaves': used_leaves,
+        'remaining_leaves': remaining_leaves,
+        'pending_approvals': pending_approvals,
+        'this_month': this_month_days,
+        'team_on_leave': team_on_leave
+    })
+

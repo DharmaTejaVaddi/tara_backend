@@ -2249,6 +2249,8 @@ def employee_list(request):
     elif request.method == 'POST':
         payroll_id = request.data.get("payroll")
         context_id = None
+        data = request.data.copy()
+        reporting_manager = data.get("reporting_manager")
 
         # Step 1: Resolve context via payroll -> business -> context
         try:
@@ -2283,6 +2285,14 @@ def employee_list(request):
             if serializer.is_valid():
                 employee = serializer.save()
                 increment_usage(usage_entry)
+                if reporting_manager:
+                    reporting_manager['employee'] = employee
+                    if reporting_manager.get('reporting_manager') == 0:
+                        reporting_manager['reporting_manager'] = employee.id
+                    reporting_to = EmployeeReportingManagerSerializer(data=reporting_manager)
+                    if reporting_to.is_valid():
+                        reporting_to.save()
+                        print(reporting_to.data)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
                 
@@ -5233,24 +5243,19 @@ def employee_reporting_manager_list(request):
        - Also fetches heads of department from the same department and higher levels.
     """
     payroll = request.query_params.get('payroll_id')
-    employee_id = request.query_params.get('employee_id')
+    employee_level = request.query_params.get('employee_level')
+    department = request.query_params.get('department')
 
     if not payroll:
-        return Response({"error": "payroll_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-    if not employee_id:
-        return Response({"error": "employee_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Payroll Id is Required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not employee_level:
+        return Response({"error": "Employee Level is Required"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         payroll_instance = PayrollOrg.objects.get(id=payroll)
     except PayrollOrg.DoesNotExist:
         return Response({"error": "Invalid payroll_id"}, status=status.HTTP_404_NOT_FOUND)
 
-    try:
-        employee = EmployeeManagement.objects.get(id=employee_id)
-    except EmployeeManagement.DoesNotExist:
-        return Response({"error": "Invalid employee_id"}, status=status.HTTP_404_NOT_FOUND)
-
-    employee_level = employee.employee_level
     try:
         employee_level_int = int(employee_level)
     except ValueError:
@@ -5269,18 +5274,20 @@ def employee_reporting_manager_list(request):
 
     if employee_level_int in [0, 1]:
         reporting_managers_data.insert(0, {
-            "id": employee.id,
+            "id": 0,
             "fullname": "Self"
         })
 
     # Filter the HODs from the same queryset
-    hod_data = ReportingHODChoiceSerializer(
-        potential_managers.filter(department=employee.department),
-        many=True
-    ).data
+    if department:
+        hod_data = ReportingHODChoiceSerializer(
+            potential_managers.filter(department=department),
+            many=True
+        ).data
+    else:
+        hod_data = ReportingHODChoiceSerializer(potential_managers, many=True).data
 
     return Response({
-        "employee": employee_id,
         "reporting_managers": reporting_managers_data,
         "heads_of_department": hod_data,
     }, status=status.HTTP_200_OK)

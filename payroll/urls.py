@@ -315,4 +315,7 @@ urlpatterns = [
     path('employee/reset-password/', employee_dashboard.reset_password, name='reset-password'),
 
     path('leave-types/', leavemanagement.get_leave_types, name='get_leave_types'),
+    path('leave-dashboard-summary/', leavemanagement.get_leave_dashboard_summary, name='leave-dashboard'),
+    path('applied-leave-retrieval/', leavemanagement.get_my_leave_applications_with_status,
+         name='applied-leave-retrieval'),
 ]

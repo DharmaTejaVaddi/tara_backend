@@ -1199,7 +1199,8 @@ class EmployeeFaceRecognitionSerializer(serializers.ModelSerializer):
 
 
 class LeaveApplicationSerializer(serializers.ModelSerializer):
-    cc_to = serializers.PrimaryKeyRelatedField(many=True, queryset=EmployeeCredentials.objects.all(), required=False)
+    cc_to = serializers.PrimaryKeyRelatedField(many=True, queryset=EmployeeManagement.objects.all(), required=False)
+    requested_days = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LeaveApplication
@@ -1211,8 +1212,20 @@ class LeaveApplicationSerializer(serializers.ModelSerializer):
         if data['start_date'] > data['end_date']:
             raise serializers.ValidationError("End date must be after start date")
 
-        # Validate leave doesn't span more than allowed days based on type
-        leave_days = (data['end_date'] - data['start_date']).days + 1
+        # Half-day validations (Zoho/Odoo-style)
+        is_half = data.get('is_half_day', False)
+        half_session = data.get('half_day_session')
+        if is_half:
+            if data['start_date'] != data['end_date']:
+                raise serializers.ValidationError("Half-day leave must start and end on the same date")
+            if not half_session:
+                raise serializers.ValidationError({"half_day_session": "This field is required for half-day leave"})
+        else:
+            if half_session:
+                raise serializers.ValidationError({"half_day_session": "Must be empty when not a half-day leave"})
+
+        # Compute requested days considering half-day
+        leave_days = 0.5 if is_half else (data['end_date'] - data['start_date']).days + 1
 
         if data['leave_type'] == 'CL' and leave_days > 3:
             raise serializers.ValidationError("Casual leave cannot be more than 3 days")
@@ -1243,6 +1256,16 @@ class LeaveApplicationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("You already have a leave application for these dates")
 
         return data
+
+    def get_requested_days(self, obj):
+        try:
+            return obj.requested_days
+        except Exception:
+            if getattr(obj, 'is_half_day', False):
+                return 0.5
+            if obj.start_date and obj.end_date:
+                return (obj.end_date - obj.start_date).days + 1
+            return 0
 
 
 class EmployeeEducationDetailsSerializer(serializers.ModelSerializer):
