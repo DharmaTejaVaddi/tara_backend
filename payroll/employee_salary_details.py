@@ -4,6 +4,7 @@ from django.utils.timezone import now, localtime
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import EmployeeCredentials, EmployeeSalaryHistory, EmployeeSalaryDetails
+from usermanagement.models import Users
 from .serializers import (EmployeeCredentialsSerializer, EmployeeSalaryHistorySerializer, EmployeeSalaryDetailsSerializer,
                           EmployeeFinancialYearPayslipSerializer)
 from payroll.authentication import EmployeeJWTAuthentication
@@ -14,34 +15,37 @@ from rest_framework import status
 from collections import defaultdict
 from .views import number_to_words_in_indian_format
 from django.db.models import Sum
+from .attendance_controller import get_payroll_and_employee
 
 
 @api_view(['GET'])
-@authentication_classes([EmployeeJWTAuthentication])
+@permission_classes([IsAuthenticated])
 def employee_payslip_details(request):
-    employee = request.user
-
-    if not isinstance(employee, EmployeeCredentials):
+    user = request.user
+    if not isinstance(user, Users):
         return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
 
     month = request.query_params.get('month', now().month)
     financial_year = request.query_params.get('financial_year')
 
 
     try:
-        salary_details = EmployeeSalaryHistory.objects.filter(employee=employee.employee,
+        salary_details = EmployeeSalaryHistory.objects.filter(employee=employee,
                                 month=month, financial_year=financial_year).first()
         if not salary_details:
             return Response({'error': 'Salary details not found'}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = EmployeeSalaryHistorySerializer(salary_details)
         data = serializer.data.copy()
-        data['bank_name'] = employee.employee.employee_bank_details.bank_name if (
-            employee.employee.employee_bank_details.bank_name) else None
-        data['bank_account_number'] = employee.employee.employee_bank_details.account_number if (
-            employee.employee.employee_bank_details.account_number) else None
-        data['pf_account_number'] = employee.employee.statutory_components.get('employee_provident_fund',
-                        {}).get('pf_account_number') if (employee.employee.statutory_components.get('epf_enabled') is
+        data['bank_name'] = employee.employee_bank_details.bank_name if (
+            employee.employee_bank_details.bank_name) else None
+        data['bank_account_number'] = employee.employee_bank_details.account_number if (
+            employee.employee_bank_details.account_number) else None
+        data['pf_account_number'] = employee.statutory_components.get('employee_provident_fund',
+                        {}).get('pf_account_number') if (employee.statutory_components.get('epf_enabled') is
                                                          True) else None
         data['net_pay_in_words'] = number_to_words_in_indian_format(data['net_salary']).title() + " Rupees Only"
 
@@ -67,12 +71,14 @@ def get_valid_fy_months_upto(month_limit):
 
 
 @api_view(['GET'])
-@authentication_classes([EmployeeJWTAuthentication])
+@permission_classes([IsAuthenticated])
 def get_month_and_ytd_salary_data(request):
-    employee = request.user
-
-    if not isinstance(employee, EmployeeCredentials):
+    user = request.user
+    if not isinstance(user, Users):
         return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
 
     financial_year = request.query_params.get('financial_year')
     selected_month = request.query_params.get('month')
@@ -98,7 +104,7 @@ def get_month_and_ytd_salary_data(request):
     valid_months = get_valid_fy_months_upto(selected_month)
 
     salary_qs = EmployeeSalaryHistory.objects.filter(
-        employee=employee.employee,
+        employee=employee,
         financial_year=financial_year,
         month__in=valid_months
     ).order_by('month')
@@ -211,19 +217,21 @@ def get_month_and_ytd_salary_data(request):
 
 
 @api_view(['GET'])
-@authentication_classes([EmployeeJWTAuthentication])
+@permission_classes([IsAuthenticated])
 def get_employee_financial_year_payslip_details(request):
-    employee = request.user
-
-    if not isinstance(employee, EmployeeCredentials):
+    user = request.user
+    if not isinstance(user, Users):
         return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
 
     financial_year = request.query_params.get('financial_year')
     if not financial_year:
         return Response({'error': 'financial_year is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     salary_history = EmployeeSalaryHistory.objects.filter(
-        employee=employee.employee,
+        employee=employee,
         financial_year=financial_year
     ).order_by('-month')
 
@@ -236,12 +244,14 @@ def get_employee_financial_year_payslip_details(request):
 
 
 @api_view(['GET'])
-@authentication_classes([EmployeeJWTAuthentication])
+@permission_classes([IsAuthenticated])
 def get_pf_breakdown(request):
-    employee = request.user
-
-    if not isinstance(employee, EmployeeCredentials):
+    user = request.user
+    if not isinstance(user, Users):
         return Response({'error': 'Invalid employee credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    payroll, employee, error_response = get_payroll_and_employee(request)
+    if error_response:
+        return error_response
 
     financial_year = request.query_params.get('financial_year')
     selected_month = request.query_params.get('month')
@@ -267,7 +277,7 @@ def get_pf_breakdown(request):
     valid_months = get_valid_fy_months_upto(selected_month)
 
     salary_qs = EmployeeSalaryHistory.objects.filter(
-        employee=employee.employee,
+        employee=employee,
         financial_year=financial_year,
         month__in=valid_months
     ).order_by('month')
