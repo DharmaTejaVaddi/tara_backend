@@ -48,13 +48,16 @@ def login_user(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        # update last login
         user.last_login = timezone.now()
         user.save()
 
+        # create tokens
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)
         refresh_token = str(refresh)
 
+        # default values
         active_context = None
         context_data = None
         user_role = None
@@ -65,7 +68,7 @@ def login_user(request):
         user_context_role_id = None
         service_requests = []
 
-        # Get all active context roles for the user
+        # get all active context roles for the user
         user_context_roles = UserContextRole.objects.filter(
             user=user,
             status='active'
@@ -80,7 +83,7 @@ def login_user(request):
                 "status": context.status,
                 "profile_status": context.profile_status,
                 "created_at": context.created_at,
-                "is_active": context.id == user.active_context.id if user.active_context else False,
+                "is_active": (user.active_context and context.id == user.active_context.id),
                 "business_id": context.business_id,
                 "legal_name": context.business.legal_name if context.business and context.business.legal_name else None,
                 "is_platform_context": context.is_platform_context,
@@ -93,6 +96,7 @@ def login_user(request):
             }
             all_contexts.append(context_info)
 
+        # active context & role data (only if available)
         if user.active_context:
             active_context = user.active_context
             context_data = {
@@ -103,8 +107,7 @@ def login_user(request):
                 "profile_status": active_context.profile_status,
                 "created_at": active_context.created_at,
                 "business_id": active_context.business_id,
-                "legal_name": active_context.business.legal_name if active_context.business and
-                                                                    active_context.business.legal_name else None,
+                "legal_name": active_context.business.legal_name if active_context.business and active_context.business.legal_name else None,
                 "is_platform_context": active_context.is_platform_context,
             }
 
@@ -132,6 +135,7 @@ def login_user(request):
             except UserContextRole.DoesNotExist:
                 pass
 
+            # subscriptions
             subscriptions = ModuleSubscription.objects.filter(
                 context=active_context,
                 status__in=['active', 'trial']
@@ -150,7 +154,7 @@ def login_user(request):
                     "auto_renew": subscription.auto_renew
                 })
 
-            # ✅ Only include service requests where the logged-in user owns the context
+            # service requests (only if user owns context)
             if active_context.owner_user_id == user.id:
                 requests = ServiceRequest.objects.filter(context=active_context)
                 for req in requests:
@@ -166,6 +170,7 @@ def login_user(request):
                         "updated_at": req.updated_at
                     })
 
+        # user info
         user_data = {
             "id": user.id,
             "email": user.email,
@@ -176,54 +181,53 @@ def login_user(request):
             "registration_completed": user.registration_completed,
             "created_at": user.created_at,
             "last_login": user.last_login,
-            "user_context_role": user_context_role_id,
+            "user_context_role": user_context_role_id if user_context_role_id else None,
             "is_super_admin": user.is_super_admin,
         }
 
+        # add custom claim only if exists
         if active_user_context_role:
             refresh['user_context_role'] = active_user_context_role.id
-            access_token = str(refresh.access_token)
-            refresh_token = str(refresh)
 
-            # usermanagement/login_api.py - UPDATE YOUR EXISTING LOGIN FUNCTION
+        # regenerate tokens after claim
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
 
-            # Create the response with your existing data
-            response_data = {
-                "message": "Login successful",
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "user": user_data,
-                "active_context": context_data,
-                "all_contexts": all_contexts,
-                "user_role": role_data,
-                "module_subscriptions": module_subscriptions,
-                "service_requests": service_requests,
-                "user_context_role": user_context_role_id
-            }
+        # build response
+        response_data = {
+            "message": "Login successful",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": user_data,
+            "active_context": context_data if context_data else None,
+            "all_contexts": all_contexts,
+            "user_role": role_data if role_data else None,
+            "module_subscriptions": module_subscriptions,
+            "service_requests": service_requests,
+            "user_context_role": user_context_role_id if user_context_role_id else None
+        }
 
-            # Create response
-            response = Response(response_data, status=status.HTTP_200_OK)
+        response = Response(response_data, status=status.HTTP_200_OK)
 
-            # Set cross-subdomain cookies for seamless navigation
-            response.set_cookie(
-                'access_token',
-                access_token,
-                domain='.dev-backend.tarafirst.com',  # This makes it work across subdomains
-                secure=True,
-                httponly=True,
-                max_age=43200  # 12 hours
-            )
+        # cross-subdomain cookies
+        response.set_cookie(
+            'access_token',
+            access_token,
+            domain='.dev-backend.tarafirst.com',
+            secure=True,
+            httponly=True,
+            max_age=43200  # 12 hours
+        )
+        response.set_cookie(
+            'refresh_token',
+            refresh_token,
+            domain='.dev-backend.tarafirst.com',
+            secure=True,
+            httponly=True,
+            max_age=86400  # 24 hours
+        )
 
-            response.set_cookie(
-                'refresh_token',
-                refresh_token,
-                domain='.dev-backend.tarafirst.com',  # This makes it work across subdomains
-                secure=True,
-                httponly=True,
-                max_age=86400  # 24 hours
-            )
-
-            return response
+        return response
 
     except Exception as e:
         return Response(
